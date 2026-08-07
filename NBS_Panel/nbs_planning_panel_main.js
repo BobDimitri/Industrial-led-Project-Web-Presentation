@@ -322,9 +322,9 @@
             const link = document.createElement('link');
             link.id = 'nbs-panel-css';
             link.rel = 'stylesheet';
-            const scriptElement = Array.from(document.scripts).find(s => s.src && s.src.includes('NBS_Planning_Panel_Main.js'));
+            const scriptElement = Array.from(document.scripts).find(s => s.src && s.src.includes('nbs_planning_panel_main.js'));
             const basePath = scriptElement ? new URL('.', scriptElement.src).toString() : '';
-            link.href = basePath + 'NBS_Panel_Style.css';
+            link.href = basePath + 'nbs_panel_style.css';
             document.head.appendChild(link);
             console.log('[NBS] CSS injected:', link.href);
         }
