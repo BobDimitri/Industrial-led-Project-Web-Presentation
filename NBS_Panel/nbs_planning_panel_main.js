@@ -8,7 +8,7 @@
     const CFG = {
         center: [-6.2603, 53.3498],
         bbox: '53.30,-6.37,53.41,-6.12',
-        dccBoundaryUrl: './Boundaries/DCC_Boundary.geojson',
+        dccBoundaryUrl: './Boundaries/dcc_boundary.geojson',
         overpassEndpoints: [
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
