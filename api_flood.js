@@ -17,10 +17,18 @@
     let chartModal = null;
 
     function getK(month) {
-        if (month >= 1 && month <= 3) return 0.97;
-        if (month >= 4 && month <= 6) return 0.94;
-        if (month >= 7 && month <= 9) return 0.80;
-        return 0.90;
+        if (month === 1) return 0.980;
+        if (month === 2) return 0.964;
+        if (month === 3) return 0.935
+        if (month === 4) return 0.898
+        if (month === 5) return 0.858
+        if (month === 6) return 0.822
+        if (month === 7) return 0.800
+        if (month === 8) return 0.822
+        if (month === 9) return 0.858
+        if (month === 10) return 0.898
+        if (month === 11) return 0.935
+        if (month === 12) return 0.964;   
     }
 
     function getRFRIRisk(rfri) {
