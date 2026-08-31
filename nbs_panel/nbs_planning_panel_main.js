@@ -1,6 +1,5 @@
 // ============================================
 // NBS Planning Panel v2.1
-// 修复：删除建筑状态点 / 使用真实 DCC 边界 / ITM->WGS84 转换
 // ============================================
 (function() {
     'use strict';
@@ -14,32 +13,64 @@
             'https://overpass.kumi.systems/api/interpreter',
             'https://overpass.private.coffee/api/interpreter'
         ],
-        cacheKey: 'nbs_v2_buildings',
+        cacheKey: 'nbs_v3_buildings',
         cacheTTL: 24 * 60 * 60 * 1000,
         rainfallEvent: 0.030,
         greenRoof: {
-            runoffReduction: 0.65,
-            carbonRate: 2.5,
-            storageDepth: 20,
+            runoffReduction: 0.7,
+            coverageRunoffReduction: 0.3,
+            carbonRate: 0.187,
+            storageDepth: 80,
+            waterStorageCapacity: 30,
             color: '#22c55e',
             label: 'Green Roof',
             vBuilding: 0.70
         },
-        catchmentAreaM2: 118 * 1_000_000,
+        catchmentAreaM2: 115 * 1_000_000,
         fiFormula: {
-            rainCoeff: 0.72, rainMax: 84,
-            apiCoeff: 0.28, apiMax: 167.56
+            rainCoeff: 0.68, rainMax: 84,
+            apiCoeff: 0.32, apiMax: 176.44
         },
         today: { pt: 45, api: 80 },
         forecast: [
             { date: 'Today',     rain: 45, api: 80 },
-            { date: 'Tomorrow',  rain: 32, api: 85 },
+            { date: 'Day 2',     rain: 32, api: 85 },
             { date: 'Day 3',     rain: 12, api: 78 },
             { date: 'Day 4',     rain: 58, api: 92 },
             { date: 'Day 5',     rain: 22, api: 70 }
         ]
     };
 
+    function syncForecastFromShared() {
+        const shared = window.RFRIShared;
+        if (!shared?.waitForReady) return Promise.resolve(false);
+
+        return shared.waitForReady().then(snapshot => {
+            if (!snapshot?.forecast?.length) return false;
+
+            CFG.forecast = snapshot.forecast.map(item => ({
+                date: item.date,
+                rain: item.rain,
+                api: item.api,
+                rfri: item.rfri
+            }));
+            CFG.today = {
+                pt: snapshot.todayRain,
+                api: snapshot.todayApi,
+                rfri: snapshot.todayRFRI,
+                todayRFRI: snapshot.todayRFRI
+            };
+            return true;
+        });
+        document.getElementById('nbs-storage-depth').oninput = () => {
+            if (S.selectedUid === null || !S.buildings) return;
+            const f = S.buildings.features.find(b => b.properties.uid == S.selectedUid);
+            if (f) {
+                const area = Number(f.properties.footprint_area_m2) || geoAreaM2(f.geometry.coordinates[0].slice(0, -1));
+                updateBuildingImpact(S.selectedUid, area);
+            }
+        };
+    }
     const S = {
         map: null,
         buildings: null,
@@ -122,7 +153,7 @@
         return copy;
     }
 
-    // ===== 几何工具 =====
+    // ===== Geometry Tools =====
     function geoAreaM2(pts) {
         if (pts.length < 3) return 0;
         const R = 6371000;
@@ -136,6 +167,7 @@
         return Math.abs(s) * R * R / 2;
     }
 
+    // ==== Point in Polygon Test =====
     function pointInPolygon(point, polygon) {
         const x = point[0], y = point[1];
         let inside = false;
@@ -147,7 +179,7 @@
         }
         return inside;
     }
-
+    // === Get Feature Center ===
     function getFeatureCenter(feature) {
         const coords = feature?.geometry?.coordinates;
         if (!coords) return null;
@@ -160,7 +192,7 @@
         visit(coords);
         return [(minX + maxX) / 2, (minY + maxY) / 2];
     }
-
+    // === Check if Feature is Inside DCC Boundary ===
     function isInsideDcc(feature) {
         if (!S.dccBoundary) return true;
         const center = getFeatureCenter(feature);
@@ -192,11 +224,6 @@
     }
 
     // ===== RFRI =====
-    function calcBaseRFRI(pt, api) {
-        const f = CFG.fiFormula;
-        return f.rainCoeff * (pt / f.rainMax) + f.apiCoeff * (api / f.apiMax);
-    }
-
     function calcVnbsMM() {
         let totalStorage = 0;
         if (S.buildings) {
@@ -231,22 +258,32 @@
         return Math.max(0, Math.min(100, pct)) * CFG.greenRoof.storageDepth / 100;
     }
 
-    function calcAdjustedRFRI(pt, api) {
+    function calcAdjustedRFRI(baseRFRI, rain) {
         const vnbs = calcVnbsMM();
-        const effectiveRain = Math.max(0, pt - vnbs);
-        return calcBaseRFRI(effectiveRain, api);
+        return calcRFRIWithReduction(baseRFRI, rain, vnbs);
     }
 
-    function calcAdjustedRFRIBuildings(pt, api) {
+    function calcAdjustedRFRIBuildings(baseRFRI, rain) {
         const vnbs = calcVnbsMMBuildings();
-        const effectiveRain = Math.max(0, pt - vnbs);
-        return calcBaseRFRI(effectiveRain, api);
+        return calcRFRIWithReduction(baseRFRI, rain, vnbs);
     }
 
-    function calcAdjustedRFRICoverage(pt, api, pct) {
-        const vnbs = calcVnbsMMCoverageTarget(pct);
-        const effectiveRain = Math.max(0, pt - vnbs);
-        return calcBaseRFRI(effectiveRain, api);
+    function calcAdjustedRFRICoverage(rain, api, pct) {
+        const coverageRate = Math.max(0, Math.min(100, pct)) / 100;
+        const effectiveRain = rain * (1 - coverageRate * CFG.greenRoof.coverageRunoffReduction);
+        const f = CFG.fiFormula;
+        return f.rainCoeff * (effectiveRain / f.rainMax) + f.apiCoeff * (api / f.apiMax);
+    }
+
+    function calcRFRIWithReduction(baseRFRI, rain, vnbs) {
+        const f = CFG.fiFormula;
+        const mitigatedRain = Math.min(Math.max(0, rain), Math.max(0, vnbs));
+        const reduction = f.rainCoeff * (mitigatedRain / f.rainMax);
+        return Math.max(0, baseRFRI - reduction);
+    }
+
+    function calcAdjustedRFRIFromBase(baseRFRI, rain, vnbs) {
+        return calcRFRIWithReduction(baseRFRI, rain, vnbs);
     }
 
     function getCoverage() {
@@ -318,6 +355,11 @@
         console.log('[NBS] map container found:', mapDiv.id || mapDiv.className);
         if (getComputedStyle(mapDiv).position === 'static') mapDiv.style.position = 'relative';
 
+        syncForecastFromShared().then(() => updateChart());
+        window.addEventListener('fi-ready', () => {
+            syncForecastFromShared().then(() => updateChart());
+        });
+
         if (!document.getElementById('nbs-panel-css')) {
             const link = document.createElement('link');
             link.id = 'nbs-panel-css';
@@ -344,14 +386,17 @@
             '<div id="nbs-sidebar"><div id="nbs-sidebar-inner">' +
             '<div id="nbs-bldg-head"><button id="nbs-bldg-close">\u2715</button><div id="nbs-bldg-name">Select a building</div><div id="nbs-bldg-meta">Click any building to assign Green Roof</div></div>' +
             '<div id="nbs-assign-section"><div id="nbs-assign-title">Nature-Based Solution</div><div class="nbs-option" data-nbs="none"><span class="nbs-dot"></span><span class="nbs-label">No NBS</span><span class="nbs-check">Selected</span></div><div class="nbs-option" data-nbs="green_roof"><span class="nbs-dot" style="background:#22c55e"></span><span class="nbs-label">Green Roof</span><span class="nbs-check">Selected</span></div></div>' +
-            '<div id="nbs-bldg-impact"><div id="nbs-bldg-impact-title">Building Impact</div><div class="impact-grid"><div class="impact-cell"><div class="impact-cell-label">Footprint</div><div class="impact-cell-value" id="imp-area">--</div></div><div class="impact-cell"><div class="impact-cell-label">Height</div><div class="impact-cell-value" id="imp-height">--</div></div><div class="impact-cell"><div class="impact-cell-label">Runoff Mitigated</div><div class="impact-cell-value" id="imp-runoff">--</div></div><div class="impact-cell"><div class="impact-cell-label">Carbon Saved / yr</div><div class="impact-cell-value" id="imp-carbon">--</div></div></div></div>' +
+            '<div id="nbs-bldg-impact"><div id="nbs-bldg-impact-title">Building Impact</div><div class="impact-grid"><div class="impact-cell"><div class="impact-cell-label">Footprint</div><div class="impact-cell-value" id="imp-area">--</div></div><div class="impact-cell"><div class="impact-cell-label">Height</div><div class="impact-cell-value" id="imp-height">--</div></div><div class="impact-cell"><div class="impact-cell-label">Water Storage</div><div class="impact-cell-value" id="imp-runoff">--</div></div><div class="impact-cell"><div class="impact-cell-label">Carbon Saved / yr</div><div class="impact-cell-value" id="imp-carbon">--</div></div></div><div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:#8b95a8;"><label for="nbs-storage-depth">Storage Depth (mm)</label><input id="nbs-storage-depth" type="number" min="0" step="1" value="80" style="width:76px;padding:4px 6px;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(15,23,42,0.7);color:#e8ecf1;"></div></div>' +
             '<div id="nbs-coverage-section"><div id="nbs-coverage-title">Coverage</div><div id="nbs-coverage-row"><input type="range" id="nbs-coverage-slider" min="0" max="100" value="30"><input type="number" id="nbs-coverage-input" min="0" max="100" step="1" value="30"><span id="nbs-coverage-val">30%</span></div><div id="nbs-coverage-current">Current: 0% (target: 30%)</div></div>' +
             '<div id="nbs-summary"><div id="nbs-summary-title">Coverage Summary</div><div class="summary-row"><span class="summary-label">NBS Coverage</span><div class="summary-bar-wrap"><div class="summary-bar" id="sum-bar-gr" style="width:0%"></div></div><span class="summary-count" id="sum-count-gr">0%</span></div><div id="nbs-coverage-badge"><span id="nbs-coverage-badge-label">Actual Coverage</span><span id="nbs-coverage-badge-pct">0%</span></div></div>' +
             '</div></div>' +
             '<div id="nbs-chart-box"><div class="nbs-chart-panel"><div class="nbs-chart-header"><h4 class="nbs-chart-title">📉 Building RFRI Forecast</h4><div class="nbs-chart-legend"><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#4452ef"></span>Original</span><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#22c55e"></span>With Building NBS</span><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#f97316"></span>Selected Building</span></div></div><canvas id="nbs-chart-canvas-building" height="140"></canvas></div><div class="nbs-chart-panel"><div class="nbs-chart-header"><h4 class="nbs-chart-title">📈 Coverage RFRI Forecast</h4><div class="nbs-chart-legend"><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#4452ef"></span>Original</span><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#22c55e"></span>With Coverage</span><span class="chart-legend-item"><span class="chart-legend-dot" style="background:#38bdf8"></span>Actual Coverage</span></div></div><canvas id="nbs-chart-canvas-coverage" height="140"></canvas></div></div>' +            '<div id="nbs-toolbar"><button class="nbs-tool-btn on" id="tb-buildings"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="10" width="4" height="11"/><rect x="10" y="6" width="4" height="15"/><rect x="17" y="3" width="4" height="18"/></svg>Buildings</button><div class="nbs-tool-sep"></div><button class="nbs-tool-btn" id="tb-draw"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="2" y1="17" x2="12" y2="22"/><line x1="22" y1="17" x2="12" y2="22"/></svg>Draw Zone</button><button class="nbs-tool-btn" id="tb-zones"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Zones</button><div class="nbs-tool-sep"></div><button class="nbs-tool-btn" id="tb-export"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button></div>' +
             '<div id="nbs-draw-hint">Click to add points \u00B7 Double-click to finish \u00B7 Esc to cancel</div>' +
-            '<div id="nbs-zones-panel"><div id="nbs-zones-inner"><div id="nbs-zones-head"><span id="nbs-zones-head-title">NBS Green Zones</span><button id="nbs-zones-close">\u2715</button></div><div id="nbs-zones-list"><div id="nbs-zones-empty">No zones drawn yet.<br>Click "Draw Zone" to start.</div></div><div id="nbs-zones-totals"><div class="zt-row"><span>Total Area</span><span id="zt-area">\u2014</span></div><div class="zt-row"><span>Coverage</span><span id="zt-coverage">\u2014</span></div><div class="zt-row"><span>Runoff Mitigated</span><span id="zt-runoff">\u2014</span></div><div class="zt-row"><span>Carbon Saved / yr</span><span id="zt-carbon">\u2014</span></div><button id="nbs-zones-clear">Clear All Zones</button></div></div></div>';
+            '<div id="nbs-zones-panel"><div id="nbs-zones-inner"><div id="nbs-zones-head"><span id="nbs-zones-head-title">NBS Green Zones</span><button id="nbs-zones-close">\u2715</button></div><div id="nbs-zones-list"><div id="nbs-zones-empty">No zones drawn yet.<br>Click "Draw Zone" to start.</div></div><div id="nbs-zones-totals"><div class="zt-row"><span>Total Area</span><span id="zt-area">\u2014</span></div><div class="zt-row"><span>Coverage</span><span id="zt-coverage">\u2014</span></div><div class="zt-row"><span>Water Storage</span><span id="zt-runoff">\u2014</span></div><div class="zt-row"><span>Carbon Saved / yr</span><span id="zt-carbon">\u2014</span></div><button id="nbs-zones-clear">Clear All Zones</button></div></div></div>';
         mapDiv.appendChild(panel);
+        const chartLegends = document.querySelectorAll('#nbs-chart-box .nbs-chart-legend');
+        chartLegends[0]?.children[1]?.remove();
+        chartLegends[1]?.children[2]?.remove();
         bindEvents();
     }
 
@@ -546,7 +591,7 @@
         return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[b[1], b[0]], [b[3], b[0]], [b[3], b[2]], [b[1], b[2]], [b[1], b[0]]]] }, properties: {} }] };
     }
 
-    // ===== 建筑数据 =====
+    // ===== Building Data =====
     async function loadBuildings() {
         try {
             const cached = localStorage.getItem(CFG.cacheKey);
@@ -564,23 +609,62 @@
     }
 
     async function fetchBuildingsFromOverpass() {
-        const q = '[out:json][timeout:25];(way["building"](' + CFG.bbox + '););out geom qt;';
-        for (const ep of CFG.overpassEndpoints) {
-            try {
-                const ac = new AbortController();
-                const ti = setTimeout(() => ac.abort(), 22000);
-                const r = await fetch(ep + '?data=' + encodeURIComponent(q), { signal: ac.signal });
-                clearTimeout(ti);
-                if (!r.ok) continue;
-                const j = await r.json();
-                if (!j.elements?.length) continue;
-                const gj = overpassToGeoJSON(j);
-                if (gj.features.length < 5) continue;
-                console.log('[NBS] Overpass success:', ep, gj.features.length, 'buildings');
-                return gj;
-            } catch(e) { console.warn('[NBS] ' + ep + ' failed:', e.message); }
+        const [south, west, north, east] = CFG.bbox.split(',').map(Number);
+        const midLat = (south + north) / 2;
+        const midLng = (west + east) / 2;
+        const boxes = [
+            [south, west, midLat, midLng],
+            [south, midLng, midLat, east],
+            [midLat, west, north, midLng],
+            [midLat, midLng, north, east]
+        ];
+        const elements = new Map();
+        let successfulChunks = 0;
+
+        for (let index = 0; index < boxes.length; index++) {
+            const [chunkSouth, chunkWest, chunkNorth, chunkEast] = boxes[index];
+            const q = '[out:json][timeout:60];way["building"](' +
+                [chunkSouth, chunkWest, chunkNorth, chunkEast].join(',') + ');out geom;';
+            let chunkLoaded = false;
+
+            for (const ep of CFG.overpassEndpoints) {
+                try {
+                    const ac = new AbortController();
+                    const ti = setTimeout(() => ac.abort(), 50000);
+                    let r;
+                    try {
+                        r = await fetch(ep, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                            body: 'data=' + encodeURIComponent(q),
+                            signal: ac.signal
+                        });
+                    } finally {
+                        clearTimeout(ti);
+                    }
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const j = await r.json();
+                    if (!Array.isArray(j.elements)) throw new Error('Invalid Overpass response');
+                    j.elements.forEach(el => {
+                        if (el.type === 'way' && el.id != null) elements.set(el.id, el);
+                    });
+                    successfulChunks++;
+                    chunkLoaded = true;
+                    console.log('[NBS] Overpass chunk ' + (index + 1) + '/4 loaded:', ep, j.elements.length);
+                    break;
+                } catch (e) {
+                    console.warn('[NBS] Chunk ' + (index + 1) + ' via ' + ep + ' failed:', e.message);
+                }
+            }
+            if (!chunkLoaded) console.warn('[NBS] All Overpass endpoints failed for chunk ' + (index + 1));
         }
-        throw new Error('All Overpass endpoints failed');
+
+        if (successfulChunks === 0 || elements.size < 5) {
+            throw new Error('Overpass returned insufficient building data');
+        }
+        const gj = overpassToGeoJSON({ elements: Array.from(elements.values()) });
+        console.log('[NBS] Overpass success:', gj.features.length, 'unique buildings');
+        return gj;
     }
 
     function overpassToGeoJSON(data) {
@@ -614,7 +698,7 @@
         return { type: 'FeatureCollection', features };
     }
 
-    // ===== 建筑图层（已删除 circle 点图层） =====
+    // ===== Building Layers (circle point layers removed) =====
     function addBuildingLayers() {
         if (!S.map || !S.buildings) return;
         ['nbs-bldg-fill', 'nbs-bldg-line', 'nbs-bldg-highlight'].forEach(id => {
@@ -644,7 +728,7 @@
         S.map.on('mouseleave', 'nbs-bldg-fill', () => { if (!S.drawMode) S.map.getCanvas().style.cursor = ''; });
     }
 
-    // ===== 区域图层 =====
+    // ===== Draw Zones =====
     function addZoneLayers() {
         if (!S.map) return;
         if (!S.map.getSource('nbs-draw-preview')) {
@@ -672,7 +756,7 @@
         S.map.on('mouseleave', 'nbs-zone-fill', () => S.map.getCanvas().style.cursor = '');
     }
 
-    // ===== 建筑点击 =====
+    // ===== Building Click =====
     function onBuildingClick(e) {
         if (!e.features.length) return;
         const f = e.features[0]; const p = f.properties;
@@ -703,7 +787,7 @@
         updateChart();
     }
 
-    // ===== NBS 分配 =====
+    // ===== NBS Assignment =====
     function assignNBS(uid, type) {
         if (!S.buildings) return;
         S.assignments[uid] = type;
@@ -733,18 +817,22 @@
     function updateBuildingImpact(uid, area) {
         const hasGR = S.assignments[uid] === 'green_roof';
         const imp = CFG.greenRoof;
+        const depthInput = document.getElementById('nbs-storage-depth');
+        const depth = Math.max(0, Number(depthInput?.value) || imp.storageDepth);
+        const storagePerM2 = Math.min(depth, imp.waterStorageCapacity);
+        const waterStorageLiters = area * storagePerM2;
         document.getElementById('imp-area').textContent = fmtArea(area);
         document.getElementById('imp-height').textContent = (S.buildings.features.find(b => b.properties.uid == uid)?.properties.height || '--') + ' m';
         if (hasGR) {
-            document.getElementById('imp-runoff').textContent = (area * CFG.rainfallEvent * imp.runoffReduction).toFixed(1) + ' m\u00B3';
+            document.getElementById('imp-runoff').textContent = waterStorageLiters.toFixed(1) + ' L';
             document.getElementById('imp-carbon').textContent = fmtCarbon(area * imp.carbonRate);
         } else {
-            document.getElementById('imp-runoff').textContent = '0 m\u00B3';
+            document.getElementById('imp-runoff').textContent = '0 L';
             document.getElementById('imp-carbon').textContent = '0 kg';
         }
     }
 
-    // ===== 覆盖率 =====
+    // ===== Coverage =====
     function updateSummary() {
         const coveragePct = getCoverage().toFixed(1);
         document.getElementById('sum-count-gr').textContent = coveragePct + '%';
@@ -769,7 +857,7 @@
         setStatus('ready', 'Auto-assigned ' + unassigned.length + ' buildings');
     }
 
-    // ===== 工具栏 =====
+    // ===== tool bar =====
     function toggleBuildings() {
         const btn = document.getElementById('tb-buildings');
         const on = btn.classList.toggle('on');
@@ -791,7 +879,7 @@
         }
     }
 
-    // ===== 手绘区域 =====
+    // ===== Draw Zones =====
     function toggleDrawMode() {
         if (S.drawMode) cancelDraw(); else startDraw();
     }
@@ -848,11 +936,11 @@
         if (S.drawPoints.length < 3) { cancelDraw(); return; }
         const area = geoAreaM2(S.drawPoints);
         const imp = CFG.greenRoof;
-        const runoff = area * CFG.rainfallEvent * imp.runoffReduction;
+        const waterStorage = area * Math.min(imp.storageDepth, imp.waterStorageCapacity);
         const carbon = area * imp.carbonRate;
         const coveragePct = CFG.catchmentAreaM2 ? Math.min(100, (area / CFG.catchmentAreaM2) * 100) : 0;
         const id = ++S.zoneIdCounter;
-        S.zones.push({ id, pts: S.drawPoints.slice(), type: 'green_roof', area, runoff, carbon, coveragePct, color: imp.color, label: 'Green Roof' });
+        S.zones.push({ id, pts: S.drawPoints.slice(), type: 'green_roof', area, runoff: waterStorage, carbon, coveragePct, color: imp.color, label: 'Green Roof' });
         cancelDraw();
         syncZoneLayers();
         renderZonesList();
@@ -887,13 +975,13 @@
             '<button class="zone-del" data-zid="' + z.id + '" title="Delete">\uD83D\uDDD1</button></div>' +
             '<div class="zone-stats"><div class="zone-stat"><div class="zone-stat-v">' + fmtArea(z.area) + '</div><div class="zone-stat-l">Area</div></div>' +
             '<div class="zone-stat"><div class="zone-stat-v" style="color:#16a34a">' + z.coveragePct.toFixed(1) + '%</div><div class="zone-stat-l">Coverage</div></div>' +
-            '<div class="zone-stat"><div class="zone-stat-v" style="color:#38bdf8">' + z.runoff.toFixed(1) + ' m\u00B3</div><div class="zone-stat-l">Runoff</div></div></div></div>'
+            '<div class="zone-stat"><div class="zone-stat-v" style="color:#38bdf8">' + z.runoff.toFixed(1) + ' L</div><div class="zone-stat-l">Water Storage</div></div></div></div>'
         ).join('');
         list.querySelectorAll('.zone-del').forEach(btn => {
             btn.onclick = e => { e.stopPropagation(); deleteZone(parseInt(btn.dataset.zid)); };
         });
         document.getElementById('zt-area').textContent = fmtArea(S.zones.reduce((s, z) => s + z.area, 0));
-        document.getElementById('zt-runoff').textContent = S.zones.reduce((s, z) => s + z.runoff, 0).toFixed(1) + ' m\u00B3';
+        document.getElementById('zt-runoff').textContent = S.zones.reduce((s, z) => s + z.runoff, 0).toFixed(1) + ' L';
         document.getElementById('zt-carbon').textContent = fmtCarbon(S.zones.reduce((s, z) => s + z.carbon, 0));
         const coverageTotal = CFG.catchmentAreaM2 ? S.zones.reduce((s, z) => s + z.area, 0) / CFG.catchmentAreaM2 * 100 : 0;
         const coverageEl = document.getElementById('zt-coverage');
@@ -920,17 +1008,15 @@
         updateSummary();
     }
 
-    // ===== RFRI 图表 =====
+    // ===== RFRI Chart =====
     function updateChart() {
         loadChartJS(() => renderChart());
     }
 
     function renderChart() {
         const labels = CFG.forecast.map(d => d.date);
-        const baseFI = CFG.forecast.map(d => calcBaseRFRI(d.rain, d.api));
-        const buildingFI = CFG.forecast.map(d => calcAdjustedRFRIBuildings(d.rain, d.api));
+        const baseFI = CFG.forecast.map(d => d.rfri);
         const coverageFI = CFG.forecast.map(d => calcAdjustedRFRICoverage(d.rain, d.api, S.targetCoverage));
-        const actualCoverage = getCoverage();
 
         const buildingCanvas = document.getElementById('nbs-chart-canvas-building');
         if (buildingCanvas) {
@@ -941,8 +1027,7 @@
             const buildingData = {
                 labels,
                 datasets: [
-                    { label: 'Original RFRI', data: baseFI, borderColor: '#4452ef', backgroundColor: 'rgba(68,82,239,0.06)', fill: false, tension: 0.2, pointRadius: 2, yAxisID: 'rfri' },
-                    { label: 'With Building NBS', data: buildingFI, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.06)', fill: false, tension: 0.2, pointRadius: 2, borderDash: [5, 3], yAxisID: 'rfri' }
+                    { label: 'Original RFRI', data: baseFI, borderColor: '#4452ef', backgroundColor: 'rgba(68,82,239,0.06)', fill: false, tension: 0.2, pointRadius: 2, yAxisID: 'rfri' }
                 ].concat(selectedBuildingFI ? [{ label: 'Selected Building', data: selectedBuildingFI, borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.06)', fill: false, tension: 0.2, pointRadius: 2, borderDash: [4, 4], yAxisID: 'rfri' }] : [])
             };
             if (S.chartBuilding) {
@@ -964,15 +1049,14 @@
             }
         }
 
-        const coverageCanvas = document.getElementById('nbs-chart-canvas-coverage');
+    const coverageCanvas = document.getElementById('nbs-chart-canvas-coverage');
         if (coverageCanvas) {
             const ctx = coverageCanvas.getContext('2d');
             const coverageData = {
                 labels,
                 datasets: [
                     { label: 'Original RFRI', data: baseFI, borderColor: '#4452ef', backgroundColor: 'rgba(68,82,239,0.06)', fill: false, tension: 0.2, pointRadius: 2, yAxisID: 'rfri' },
-                    { label: 'With Coverage', data: coverageFI, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.06)', fill: false, tension: 0.2, pointRadius: 2, borderDash: [5, 3], yAxisID: 'rfri' },
-                    { label: 'Actual Coverage', data: labels.map(() => actualCoverage), borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.08)', fill: false, tension: 0.2, pointRadius: 2, yAxisID: 'coverage' }
+                    { label: 'With Coverage', data: coverageFI, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.06)', fill: false, tension: 0.2, pointRadius: 2, borderDash: [5, 3], yAxisID: 'rfri' }
                 ]
             };
             if (S.chartCoverage) {
@@ -984,11 +1068,10 @@
                     data: coverageData,
                     options: {
                         responsive: true, maintainAspectRatio: false,
-                        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + (ctx.dataset.yAxisID === 'coverage' ? ctx.parsed.y.toFixed(1) + '%' : ctx.parsed.y.toFixed(4)) } } },
+                        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(4) } } },
                         scales: {
                             x: { ticks: { color: '#5a6478', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
-                            rfri: { type: 'linear', position: 'left', ticks: { color: '#5a6478', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
-                            coverage: { type: 'linear', position: 'right', min: 0, max: 100, ticks: { color: '#38bdf8', font: { size: 9 }, callback: value => value + '%' }, grid: { drawOnChartArea: false } }
+                            rfri: { type: 'linear', position: 'left', ticks: { color: '#5a6478', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true }
                         }
                     }
                 });
@@ -996,7 +1079,7 @@
         }
     }
 
-    // ===== 导出 =====
+    // ===== Export Data =====
     function exportData() {
         if (!S.buildings) return;
         const out = {
@@ -1013,12 +1096,15 @@
             })),
             drawn_zones: S.zones.map(z => ({
                 id: z.id, type: z.type, label: z.label,
-                area_m2: z.area, runoff_mitigated_m3: z.runoff,
+                area_m2: z.area, water_storage_l: z.runoff,
                 carbon_saved_kg: z.carbon, coordinates: z.pts
             })),
             rfri_forecast: {
-                base: CFG.forecast.map(d => ({ date: d.date, rfri: calcBaseRFRI(d.rain, d.api) })),
-                with_nbs: CFG.forecast.map(d => ({ date: d.date, rfri: calcAdjustedRFRI(d.rain, d.api) })),
+                base: CFG.forecast.map(d => ({ date: d.date, rfri: d.rfri })),
+                with_nbs: CFG.forecast.map(d => ({
+                    date: d.date,
+                    rfri: calcAdjustedRFRIFromBase(d.rfri, d.rain, calcVnbsMM())
+                })),
                 vnbs_mm: calcVnbsMM()
             }
         };
@@ -1030,7 +1116,7 @@
         setStatus('ready', 'Report exported');
     }
 
-    // ===== 状态 =====
+    // ===== Condition =====
     function setStatus(type, text) {
         const dot = document.getElementById('nbs-status-dot');
         const txt = document.getElementById('nbs-status-text');
@@ -1042,7 +1128,7 @@
         txt.textContent = text;
     }
 
-    // ===== 启动 =====
+    // ===== Start up =====
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
@@ -1069,3 +1155,4 @@
 
     console.log('[NBS Planning Panel v2.1] Loaded');
 })();
+
