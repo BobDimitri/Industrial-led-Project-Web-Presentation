@@ -1,0 +1,47 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "uid": 1, "name": "Sample Building 1", "building": "residential", "footprint_area_m2": 120 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-6.2630, 53.3505],
+          [-6.2620, 53.3505],
+          [-6.2620, 53.3498],
+          [-6.2630, 53.3498],
+          [-6.2630, 53.3505]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "uid": 2, "name": "Sample Building 2", "building": "commercial", "footprint_area_m2": 200 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-6.2595, 53.3495],
+          [-6.2585, 53.3495],
+          [-6.2585, 53.3488],
+          [-6.2595, 53.3488],
+          [-6.2595, 53.3495]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "uid": 3, "name": "Sample Building 3", "building": "office", "footprint_area_m2": 320 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-6.2610, 53.3490],
+          [-6.2600, 53.3490],
+          [-6.2600, 53.3483],
+          [-6.2610, 53.3483],
+          [-6.2610, 53.3490]
+        ]]
+      }
+    }
+  ]
+}
