@@ -105,7 +105,14 @@
 
             const month = new Date(date).getMonth() + 1;
             // Use previous day's rain when computing API for this date
-            const apiForDate = getK(month) * (currentApi + prevRain);
+            const kVal = getK(month);
+            const apiForDate = kVal * (currentApi + prevRain);
+
+            // Debug trace (safe to keep) — helpful when verifying forecast steps in browser console
+            if (window && window.console && window.console.debug) {
+                console.debug('[RFRI forecast step]', { index, date, prevApi: currentApi, prevRain, k: kVal, apiForDate: Number(apiForDate.toFixed(6)) });
+            }
+
             currentApi = apiForDate;
 
             forecastSeries.push({
