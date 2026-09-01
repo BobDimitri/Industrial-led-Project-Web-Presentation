@@ -126,7 +126,9 @@
     }
 
     async function fetchHistoricalData() {
-        const todayStr = new Date().toISOString().split('T')[0];
+        // Use Europe/Dublin local date to avoid UTC offset issues when matching API dates
+        const nowDublin = new Date(new Date().toLocaleString('en-GB', { timeZone: 'Europe/Dublin' }));
+        const todayStr = nowDublin.toISOString().split('T')[0];
         const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${DUBLIN.latlng[0]}&longitude=${DUBLIN.latlng[1]}&daily=precipitation_sum&timezone=Europe/Dublin&start_date=2010-01-01&end_date=${todayStr}`;
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 20000);
@@ -167,7 +169,9 @@
 
                 if (!historyDates.length) throw new Error('No historical data returned');
 
-                const todayStr = new Date().toISOString().split('T')[0];
+                // Use Europe/Dublin local date for index matching
+                const nowDublin = new Date(new Date().toLocaleString('en-GB', { timeZone: 'Europe/Dublin' }));
+                const todayStr = nowDublin.toISOString().split('T')[0];
                 const todayIndex = historyDates.findIndex(date => date === todayStr);
                 if (todayIndex === -1) throw new Error(`Today ${todayStr} not found`);
 
