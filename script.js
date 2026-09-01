@@ -231,15 +231,15 @@ let boundaryLayer = null;
 
 fetch('boundaries/whole_country_planning_boundary_data.geojson')
     .then(response => {
-        if (!response.ok) throw new Error(`边界加载失败: ${response.status}`);
+        if (!response.ok) throw new Error(`Fail to load the border: ${response.status}`);
         return response.json();
     })
     .then(data => {
-        console.log('边界数据加载成功，特征数：', data.features.length);
+        console.log('Success in Loding，Number of features：', data.features.length);
 
         boundaryLayer = L.geoJSON(data, {
             style: {
-                color: '#ff7800',        // 橙色
+                color: '#ff7800',       
                 weight: 2.5,
                 opacity: 0.9,
                 fillColor: 'transparent',
@@ -370,8 +370,11 @@ window.addEventListener('load', () => {
 
 // ==================== Quick Location Navigation ====================
 const locations = {
-    "Dublin City": { center: [53.3498, -6.2603], zoom: 13 },
-    "Swords": { center: [53.4597, -6.2181], zoom: 14 },
+    "Dublin": { center: [53.3498, -6.2603], zoom: 13 },
+    "Cork": { center: [51.8985, -8.4756], zoom: 12 },
+    "Galway": { center: [53.2707, -9.0568], zoom: 12 },
+    "Limerick": { center: [52.6653, -8.6238], zoom: 12 },
+    "Waterford": { center: [52.2593, -7.1101], zoom: 12 }
 
 };
 
