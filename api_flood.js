@@ -98,7 +98,8 @@
                 return;
             }
             const month = new Date(date).getMonth() + 1;
-            const nextApi = getK(month) * (currentApi + rain);
+            const prevRain = Number(forecastRainValues[index - 1] || 0);
+            const nextApi = getK(month) * (currentApi + prevRain);
             currentApi = nextApi;
             forecastSeries.push({
                 date,
