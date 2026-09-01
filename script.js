@@ -399,8 +399,10 @@ window.addEventListener('load', async () => {
 // ==================== Quick Location Navigation ====================
 const locations = {
     "Dublin City": { center: [53.3498, -6.2603], zoom: 13 },
-    "Swords": { center: [53.4597, -6.2181], zoom: 14 },
-
+    "Cork": { center: [51.8969, -8.4863], zoom: 12 },
+    "Galway": { center: [53.2707, -9.0568], zoom: 12 },
+    "Limerick": { center: [52.6638, -8.6267], zoom: 13 },
+    "Waterford": { center: [52.2593, -7.1101], zoom: 12 }
 };
 
 const navCSS = `
