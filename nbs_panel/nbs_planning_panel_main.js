@@ -709,20 +709,31 @@
 
         // If nothing useful, try local static files before failing (non-destructive fallback)
         if (successfulChunks === 0 || elements.size < 5) {
-            const localCandidates = ['data/buildings.geojson', 'data/testprojects.geojson'];
-            for (const p of localCandidates) {
-                try {
-                    const r = await fetch(p);
-                    if (r.ok) {
-                        const gj = await r.json();
-                        if (gj?.features?.length) {
-                            console.log('[NBS] Loaded local fallback buildings from', p);
-                            return convertGeoJSONToWgs84(gj);
-                        }
+        // Determine script basePath if available so local assets load correctly when served from nested paths
+        const scriptElement = Array.from(document.scripts).find(s => s.src && s.src.includes('nbs_planning_panel_main.js'));
+        const basePath = scriptElement ? new URL('.', scriptElement.src).toString() : '';
+
+        const localCandidates = [
+            basePath + 'data/buildings.geojson',
+            basePath + 'nbs_panel/data/buildings.geojson',
+            'data/buildings.geojson',
+            basePath + 'data/testprojects.geojson',
+            'data/testprojects.geojson'
+        ];
+
+        for (const p of localCandidates) {
+            try {
+                const r = await fetch(p);
+                if (r.ok) {
+                    const gj = await r.json();
+                    if (gj?.features?.length) {
+                        console.log('[NBS] Loaded local fallback buildings from', p);
+                        return convertGeoJSONToWgs84(gj);
                     }
-                } catch (le) { /* ignore and try next */ }
-            }
-            throw new Error('Overpass returned insufficient building data');
+                }
+            } catch (le) { console.warn('[NBS] Local fallback attempt failed for', p, le.message); }
+        }
+        throw new Error('Overpass returned insufficient building data');
         }
 
         const gj = overpassToGeoJSON({ elements: Array.from(elements.values()) });
