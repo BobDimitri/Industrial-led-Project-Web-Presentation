@@ -359,11 +359,39 @@ async function updateWaterLevels() {
     }
 }
 
-window.addEventListener('load', () => {
-    if (window.waterLevelAPI) {
-        updateWaterLevels();
-        // Start automatic refresh every 30 minutes.
-        window.waterLevelAPI.startAutoRefresh(30);
+function ensureModuleBadge() {
+    let b = document.getElementById('module-status-badge');
+    if (!b) {
+        b = document.createElement('div');
+        b.id = 'module-status-badge';
+        b.style.cssText = 'position:absolute; top:18px; right:18px; padding:6px 10px; border-radius:8px; color:#fff; font-family:system-ui; font-size:12px; z-index:10001; background:rgba(0,0,0,0.6);';
+        document.body.appendChild(b);
+    } else {
+        b.style.display = '';
+    }
+    return b;
+}
+function setModuleStatus(name, state) {
+    const b = ensureModuleBadge();
+    if (state === 'loading') { b.textContent = name + ': loading'; b.style.background = '#f59e0b'; }
+    else if (state === 'ready') { b.textContent = name + ': ready'; b.style.background = '#22c55e'; setTimeout(()=>b.style.display='none',2000); }
+    else { b.textContent = name + ': error'; b.style.background = '#ef4444'; }
+}
+
+window.addEventListener('load', async () => {
+    try {
+        if (window.waterLevelAPI?.init) {
+            setModuleStatus('Water API', 'loading');
+            await window.waterLevelAPI.init({ autoRefreshMinutes: 30 });
+            setModuleStatus('Water API', 'ready');
+        } else if (window.waterLevelAPI?.fetch) {
+            await window.waterLevelAPI.fetch();
+            window.waterLevelAPI.startAutoRefresh?.(30);
+        }
+        await updateWaterLevels();
+    } catch (err) {
+        console.error('[Water Levels] Init error:', err);
+        setModuleStatus('Water API', 'error');
     }
 });
 
@@ -432,6 +460,11 @@ Object.keys(locations).forEach(locName => {
 document.body.appendChild(navContainer);
 
 // Initial view is set to Dublin above.
+
+
+// ==================== Complete ====================
+console.log('Complete Map Loaded: Layer Switcher + Flood API + NBS Planning');
+
 
 
 // ==================== Complete ====================

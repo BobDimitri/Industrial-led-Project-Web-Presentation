@@ -319,8 +319,25 @@ return null;
         }
     }
 
-    // 导出 API
+    // Export API with explicit init/ready handshake
+    let _readyResolve, _readyReject;
+    const ready = new Promise((res, rej) => { _readyResolve = res; _readyReject = rej; });
+
     window.waterLevelAPI = {
+        // init will try to fetch fresh data and start optional auto-refresh
+        init: async function(options = {}) {
+            const { autoRefreshMinutes = 0 } = options;
+            try {
+                await fetchWaterData();
+                _readyResolve(window.waterLevelAPI);
+                if (autoRefreshMinutes && Number(autoRefreshMinutes) > 0) startAutoRefresh(Number(autoRefreshMinutes));
+                return window.waterLevelAPI;
+            } catch (err) {
+                _readyReject(err);
+                throw err;
+            }
+        },
+        ready: ready,
         fetch: fetchWaterData,
         getStation,
         getAllStations,
@@ -330,5 +347,5 @@ return null;
         getState: () => state
     };
 
-    console.log('✅ Water Level Data Module Loaded');
+    console.log('✅ Water Level Data Module Loaded (init available)');
 })();
