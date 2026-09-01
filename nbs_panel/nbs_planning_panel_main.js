@@ -716,8 +716,13 @@
         const localCandidates = [
             basePath + 'data/buildings.geojson',
             basePath + 'nbs_panel/data/buildings.geojson',
-            'data/buildings.geojson',
             basePath + 'data/testprojects.geojson',
+            '/data/buildings.geojson',
+            '/nbs_panel/data/buildings.geojson',
+            'data/buildings.geojson',
+            'buildings.geojson',
+            '/buildings.geojson',
+            basePath + 'buildings.geojson',
             'data/testprojects.geojson'
         ];
 
