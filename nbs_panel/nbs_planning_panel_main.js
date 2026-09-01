@@ -618,6 +618,20 @@
             [midLat, west, north, midLng],
             [midLat, midLng, north, east]
         ];
+
+        // Extended endpoint list (adds alternate Overpass backends)
+        const extraEndpoints = [
+            'https://overpass.openstreetmap.fr/api/interpreter',
+            'https://lz4.overpass-api.de/api/interpreter'
+        ];
+        const endpoints = Array.from(new Set([...(CFG.overpassEndpoints || []), ...extraEndpoints]));
+
+        // Optional public CORS proxies to try as a last resort (use sparingly)
+        const corsProxies = [
+            'https://api.allorigins.win/raw?url=',
+            'https://cors.bridged.cc/'
+        ];
+
         const elements = new Map();
         let successfulChunks = 0;
 
@@ -627,41 +641,90 @@
                 [chunkSouth, chunkWest, chunkNorth, chunkEast].join(',') + ');out geom;';
             let chunkLoaded = false;
 
-            for (const ep of CFG.overpassEndpoints) {
-                try {
-                    const ac = new AbortController();
-                    const ti = setTimeout(() => ac.abort(), 50000);
-                    let r;
+            for (const ep of endpoints) {
+                // Try POST first, then GET, then proxied GET
+                const attempts = [
+                    { method: 'POST', url: ep, body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' } },
+                    { method: 'GET', url: ep + '?data=' + encodeURIComponent(q) }
+                ];
+
+                for (const attemptReq of attempts) {
                     try {
-                        r = await fetch(ep, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-                            body: 'data=' + encodeURIComponent(q),
-                            signal: ac.signal
-                        });
-                    } finally {
-                        clearTimeout(ti);
+                        const ac = new AbortController();
+                        const timeoutMs = 45000;
+                        const ti = setTimeout(() => ac.abort(), timeoutMs);
+                        let r;
+                        try {
+                            r = await fetch(attemptReq.url, {
+                                method: attemptReq.method,
+                                headers: attemptReq.headers,
+                                body: attemptReq.body,
+                                signal: ac.signal
+                            });
+                        } finally { clearTimeout(ti); }
+
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        const j = await r.json();
+                        if (!Array.isArray(j.elements)) throw new Error('Invalid Overpass response');
+                        j.elements.forEach(el => { if (el.type === 'way' && el.id != null) elements.set(el.id, el); });
+                        successfulChunks++;
+                        chunkLoaded = true;
+                        console.log('[NBS] Overpass chunk ' + (index + 1) + '/4 loaded via ' + attemptReq.method + ':', ep, j.elements.length);
+                        break;
+                    } catch (e) {
+                        console.warn('[NBS] Chunk ' + (index + 1) + ' attempt via ' + ep + ' (' + attemptReq.method + ') failed:', e.message);
+                        // try next attempt (GET or next endpoint)
                     }
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    const j = await r.json();
-                    if (!Array.isArray(j.elements)) throw new Error('Invalid Overpass response');
-                    j.elements.forEach(el => {
-                        if (el.type === 'way' && el.id != null) elements.set(el.id, el);
-                    });
-                    successfulChunks++;
-                    chunkLoaded = true;
-                    console.log('[NBS] Overpass chunk ' + (index + 1) + '/4 loaded:', ep, j.elements.length);
-                    break;
-                } catch (e) {
-                    console.warn('[NBS] Chunk ' + (index + 1) + ' via ' + ep + ' failed:', e.message);
                 }
+
+                if (chunkLoaded) break;
+
+                // Try proxies for GET requests as a last resort
+                for (const proxy of corsProxies) {
+                    try {
+                        const proxiedUrl = proxy + encodeURIComponent(ep + '?data=' + encodeURIComponent(q));
+                        const ac2 = new AbortController();
+                        const ti2 = setTimeout(() => ac2.abort(), 60000);
+                        let r2;
+                        try { r2 = await fetch(proxiedUrl, { method: 'GET', signal: ac2.signal }); } finally { clearTimeout(ti2); }
+                        if (!r2.ok) throw new Error('Proxy HTTP ' + r2.status);
+                        const j2 = await r2.json();
+                        if (!Array.isArray(j2.elements)) throw new Error('Invalid proxied Overpass response');
+                        j2.elements.forEach(el => { if (el.type === 'way' && el.id != null) elements.set(el.id, el); });
+                        successfulChunks++;
+                        chunkLoaded = true;
+                        console.log('[NBS] Overpass chunk ' + (index + 1) + '/4 loaded via proxy:', proxy);
+                        break;
+                    } catch (pe) {
+                        console.warn('[NBS] Proxy attempt failed for chunk ' + (index + 1) + ':', pe.message);
+                    }
+                }
+
+                if (chunkLoaded) break;
+                console.warn('[NBS] Endpoint ' + ep + ' exhausted for chunk ' + (index + 1));
             }
-            if (!chunkLoaded) console.warn('[NBS] All Overpass endpoints failed for chunk ' + (index + 1));
+
+            if (!chunkLoaded) console.warn('[NBS] All Overpass endpoints and proxies failed for chunk ' + (index + 1));
         }
 
+        // If nothing useful, try local static files before failing (non-destructive fallback)
         if (successfulChunks === 0 || elements.size < 5) {
+            const localCandidates = ['data/buildings.geojson', 'data/testprojects.geojson'];
+            for (const p of localCandidates) {
+                try {
+                    const r = await fetch(p);
+                    if (r.ok) {
+                        const gj = await r.json();
+                        if (gj?.features?.length) {
+                            console.log('[NBS] Loaded local fallback buildings from', p);
+                            return convertGeoJSONToWgs84(gj);
+                        }
+                    }
+                } catch (le) { /* ignore and try next */ }
+            }
             throw new Error('Overpass returned insufficient building data');
         }
+
         const gj = overpassToGeoJSON({ elements: Array.from(elements.values()) });
         console.log('[NBS] Overpass success:', gj.features.length, 'unique buildings');
         return gj;

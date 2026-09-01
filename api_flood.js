@@ -86,7 +86,12 @@
         const forecastSeries = [];
         let currentApi = todayApi;
         forecastDates.forEach((date, index) => {
-            const rain = Number(forecastRainValues[index] || 0);
+            const rainForDate = Number(forecastRainValues[index] || 0);
+            // Determine previous day's rain to compute API(date)
+            const prevRain = (date === todayDate)
+                ? Number(todayRain || 0)
+                : Number((index === 0 ? todayRain : (forecastRainValues[index - 1] || 0)) || 0);
+
             if (date === todayDate) {
                 currentApi = todayApi;
                 forecastSeries.push({
@@ -97,14 +102,17 @@
                 });
                 return;
             }
+
             const month = new Date(date).getMonth() + 1;
-            const nextApi = getK(month) * (currentApi + rain);
-            currentApi = nextApi;
+            // Use previous day's rain when computing API for this date
+            const apiForDate = getK(month) * (currentApi + prevRain);
+            currentApi = apiForDate;
+
             forecastSeries.push({
                 date,
-                api: toFixed3(nextApi),
-                rain: Number(rain.toFixed(1)),
-                rfri: calcRFRIValue(rain, nextApi)
+                api: toFixed3(apiForDate),
+                rain: Number(rainForDate.toFixed(1)),
+                rfri: calcRFRIValue(rainForDate, apiForDate)
             });
         });
         return forecastSeries;
@@ -645,11 +653,20 @@
         }
     };
 
-    if (!sharedReadyPromise) {
-        sharedReadyPromise = calculateDublinAPI(3).then(() => window.RFRIShared.getCurrentSnapshot());
-    }
-    await sharedReadyPromise;
-    createPanel();
-    window.dispatchEvent(new Event('fi-ready'));
-    console.log('[FI Module] Ready');
+    // Expose init() and ready promise for explicit handshake
+    window.RFRIShared.init = function() {
+        if (!sharedReadyPromise) {
+            sharedReadyPromise = calculateDublinAPI(3).then(() => window.RFRIShared.getCurrentSnapshot());
+        }
+        return sharedReadyPromise;
+    };
+    window.RFRIShared.ready = window.RFRIShared.init();
+
+    window.RFRIShared.ready.then(() => {
+        createPanel();
+        window.dispatchEvent(new Event('fi-ready'));
+        console.log('[FI Module] Ready');
+    }).catch(err => {
+        console.error('[FI Module] init failed', err);
+    });
 })();
