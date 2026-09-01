@@ -18,7 +18,7 @@
     let sharedReadyPromise = null;
     const RFRI_FORMULA = { rainCoeff: 0.68, rainMax: 84.0, apiCoeff: 0.32, apiMax: 176.44 };
 
-    function getK(month) {
+    function getK(month) { //月份衰减系数K值（1月0.980 ~ 7月0.800），反映土壤蒸发差异//
         if (month === 1) return 0.980;
         if (month === 2) return 0.964;
         if (month === 3) return 0.935
@@ -31,7 +31,7 @@
         if (month === 10) return 0.898
         if (month === 11) return 0.935
         if (month === 12) return 0.964;   
-    }
+    } 
 
     function getRFRIRisk(rfri) {
         if (rfri >= RFRI_THRESHOLDS[4].threshold) return { ...RFRI_THRESHOLDS[4], order: 4 };
@@ -83,6 +83,7 @@
     }
 
     function buildForecastSeries(historyApiValues, historyDates, historyRain, forecastRainValues, forecastDates, todayApi, todayRain, todayDate) {
+       //buildForecastSeries() — 用K值递推未来5天API：API_t+1 = K * (API_t + 降雨_t)
         const forecastSeries = [];
         let currentApi = todayApi;
         forecastDates.forEach((date, index) => {
