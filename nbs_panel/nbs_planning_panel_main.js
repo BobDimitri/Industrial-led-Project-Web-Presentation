@@ -6,7 +6,7 @@
 
     const CFG = {
         center: [-6.2603, 53.3498],
-        buildingsUrl: './Building files/dcc_buildings.pmtiles',
+        buildingsUrl: './building files/dcc_buildings.pmtiles',
         bbox: '53.30,-6.37,53.41,-6.12',
         dccBoundaryUrl: './boundaries/dcc_boundary.geojson',
         basemaps: {
